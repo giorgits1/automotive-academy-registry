@@ -7,6 +7,7 @@ import streamlit as st
 
 from database import (
     add_manual_registration,
+    clear_all_registry_data,
     create_template_dataframe,
     delete_participant_by_id,
     delete_registration_by_id,
@@ -529,6 +530,19 @@ def render_admin_panel() -> None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
+
+    st.markdown("---")
+    st.subheader("Danger Zone")
+    st.caption("Permanently delete all participants, registrations, programs, and groups.")
+    confirm_clear = st.checkbox("I understand this action cannot be undone")
+    confirm_text = st.text_input("Type CLEAR to confirm full registry reset")
+    if st.button("Clear All Registry Data", type="secondary"):
+        if not confirm_clear or confirm_text.strip().upper() != "CLEAR":
+            st.error("Please confirm by checking the box and typing CLEAR.")
+        else:
+            clear_all_registry_data()
+            st.success("All registry data has been deleted.")
+            st.rerun()
 
 
 export_df = get_export_dataframe()

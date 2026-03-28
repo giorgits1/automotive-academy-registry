@@ -714,3 +714,11 @@ def delete_registration_by_id(registration_id: int) -> None:
 def delete_training_group(group_name: str) -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM training_groups WHERE group_name = ?", (group_name.strip(),))
+
+
+def clear_all_registry_data() -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM participant_trainings")
+        conn.execute("DELETE FROM participants")
+        conn.execute("DELETE FROM training_programs")
+        conn.execute("DELETE FROM training_groups")
