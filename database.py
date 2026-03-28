@@ -434,33 +434,49 @@ def import_from_dataframe(df: pd.DataFrame) -> tuple[int, int]:
 
 
 def create_template_dataframe() -> pd.DataFrame:
+    columns = [
+        "საიდ.კოდი",
+        "სახელი, გვარი",
+        "სქესი",
+        "პოზიცია",
+        "პოზიციის ტიპი",
+        "დივიზია",
+        "შვილობილი კომპანია",
+        "დეპარტამენტი",
+        "მიმართულება",
+        "ფილიალი",
+        "სტატუსი",
+        "თანხა",
+        "ტრენინგის კოდი",
+        "დაწყება",
+        "დასრულება",
+        "ტრენინგის დასახელება",
+        "ფორმატი",
+    ]
+
     return pd.DataFrame(
         [
             {
-                "full_name": "Nino Beridze",
-                "name": "Nino",
-                "surname": "Beridze",
-                "id_number": "12345678901",
-                "company": "Auto Service Ltd",
-                "subsidiary_company": "Auto Service Subsidiary",
-                "role": "Mechanic",
-                "position": "Senior Mechanic",
-                "position_type": "Front",
-                "division": "Light Vehicles",
-                "department": "Technical Service",
-                "direction": "TAT-LV",
-                "branch": "Tbilisi",
-                "gender": "Female",
-                "training_programs": "Engine Diagnostics, Hybrid Systems Basics",
-                "training_group": "Spring-2026 Group A",
-                "training_code": "Training-TAT-LV-20260325-1",
-                "training_format": "F2F",
-                "training_status": "Completed",
-                "start_date": "2026-03-25",
-                "end_date": "2026-03-25",
-                "amount": 480,
+                "საიდ.კოდი": "12345678901",
+                "სახელი, გვარი": "ნინო ბერიძე",
+                "სქესი": "მდედრ.",
+                "პოზიცია": "მექანიკოსი",
+                "პოზიციის ტიპი": "Front",
+                "დივიზია": "მსუბუქი ავტომობილები",
+                "შვილობილი კომპანია": 'შპს "თეგეტა მოტორსი"',
+                "დეპარტამენტი": "ტექნიკური სერვისი",
+                "მიმართულება": "TAT-LV",
+                "ფილიალი": "თბილისი",
+                "სტატუსი": "დასრულებული",
+                "თანხა": 480,
+                "ტრენინგის კოდი": "Training-TAT-LV-20260325-1",
+                "დაწყება": "2026-03-25",
+                "დასრულება": "2026-03-25",
+                "ტრენინგის დასახელება": "BREMBO-ს ბრენდის ტექნიკური ტრენინგი",
+                "ფორმატი": "F2F",
             }
-        ]
+        ],
+        columns=columns,
     )
 
 

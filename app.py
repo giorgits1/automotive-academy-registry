@@ -198,7 +198,7 @@ def render_import_section() -> None:
         "Supports both your existing Georgian headers (e.g. `საიდ.კოდი`, `ტრენინგის კოდი`, `დაწყება`) "
         "and English template headers."
     )
-    st.caption("For multiple programs, separate names with commas in `training_programs` column.")
+    st.caption("For multiple trainings, separate names with commas in `ტრენინგის დასახელება` column.")
 
     uploaded_file = st.file_uploader("Upload completed participant Excel", type=["xlsx", "xls"])
     if uploaded_file is None:
