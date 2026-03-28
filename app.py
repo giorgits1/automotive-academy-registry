@@ -1,5 +1,6 @@
 from io import BytesIO
 from datetime import datetime
+import os
 
 import pandas as pd
 import streamlit as st
@@ -7,12 +8,19 @@ import streamlit as st
 from database import (
     add_manual_registration,
     create_template_dataframe,
+    delete_participant_by_id,
+    delete_registration_by_id,
+    delete_training_group,
     create_training_group,
     get_export_dataframe,
+    get_participants_admin_dataframe,
+    get_registrations_admin_dataframe,
     get_training_groups,
     import_from_dataframe,
     init_db,
     normalize_upload_dataframe,
+    update_participant_by_id,
+    update_registration_by_id,
 )
 
 st.set_page_config(page_title="Automotive Academy Registry", layout="wide")
@@ -79,6 +87,38 @@ def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str) -> bytes:
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         df.to_excel(writer, index=False, sheet_name=sheet_name)
     return output.getvalue()
+
+
+def admin_auth_gate() -> bool:
+    st.subheader("Admin Access")
+    st.caption("Sign in to manage participants, registrations, and groups.")
+
+    if "admin_authenticated" not in st.session_state:
+        st.session_state.admin_authenticated = False
+
+    admin_password = os.getenv("ADMIN_PASSWORD", "admin123")
+    if admin_password == "admin123":
+        st.warning("Default admin password is active (`admin123`). Set `ADMIN_PASSWORD` in deployment settings.")
+
+    if st.session_state.admin_authenticated:
+        left, right = st.columns([3, 1])
+        left.success("Admin session active.")
+        if right.button("Logout", use_container_width=True):
+            st.session_state.admin_authenticated = False
+            st.rerun()
+        return True
+
+    with st.form("admin_login_form", clear_on_submit=True):
+        password = st.text_input("Admin Password", type="password")
+        submitted = st.form_submit_button("Sign In", type="primary")
+        if submitted:
+            if password == admin_password:
+                st.session_state.admin_authenticated = True
+                st.success("Signed in successfully.")
+                st.rerun()
+            else:
+                st.error("Invalid password.")
+    return False
 
 
 def render_dashboard(df: pd.DataFrame) -> None:
@@ -328,9 +368,172 @@ def render_export(df: pd.DataFrame) -> None:
     )
 
 
+def render_admin_panel() -> None:
+    if not admin_auth_gate():
+        return
+
+    def safe_text(value: object) -> str:
+        if value is None:
+            return ""
+        if pd.isna(value):
+            return ""
+        return str(value)
+
+    st.markdown("---")
+    st.subheader("Participant Manager")
+    participants_df = get_participants_admin_dataframe()
+    participant_search = st.text_input("Search participant (name or ID)")
+    if participant_search.strip():
+        p_mask = (
+            participants_df["id_number"].astype(str).str.contains(participant_search, case=False, na=False)
+            | participants_df["full_name"].astype(str).str.contains(participant_search, case=False, na=False)
+        )
+        participants_view = participants_df[p_mask].copy()
+    else:
+        participants_view = participants_df.copy()
+
+    st.dataframe(participants_view, use_container_width=True, hide_index=True)
+    if not participants_view.empty:
+        participant_options = participants_view["participant_id"].tolist()
+        selected_pid = st.selectbox("Select participant ID to edit", options=participant_options)
+        selected_row = participants_df[participants_df["participant_id"] == selected_pid].iloc[0]
+
+        with st.form("participant_edit_form"):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                full_name = st.text_input("Full Name", value=safe_text(selected_row["full_name"]))
+                id_number = st.text_input("ID Number", value=safe_text(selected_row["id_number"]))
+                name = st.text_input("Name", value=safe_text(selected_row["name"]))
+                surname = st.text_input("Surname", value=safe_text(selected_row["surname"]))
+                gender = st.text_input("Gender", value=safe_text(selected_row["gender"]))
+            with c2:
+                company = st.text_input("Company", value=safe_text(selected_row["company"]))
+                subsidiary_company = st.text_input("Subsidiary Company", value=safe_text(selected_row["subsidiary_company"]))
+                role = st.text_input("Role", value=safe_text(selected_row["role"]))
+                position = st.text_input("Position", value=safe_text(selected_row["position"]))
+                position_type = st.text_input("Position Type", value=safe_text(selected_row["position_type"]))
+            with c3:
+                division = st.text_input("Division", value=safe_text(selected_row["division"]))
+                department = st.text_input("Department", value=safe_text(selected_row["department"]))
+                direction = st.text_input("Direction", value=safe_text(selected_row["direction"]))
+                branch = st.text_input("Branch", value=safe_text(selected_row["branch"]))
+
+            if st.form_submit_button("Update Participant", type="primary"):
+                payload = {
+                    "full_name": full_name.strip(),
+                    "id_number": id_number.strip(),
+                    "name": name.strip() or "-",
+                    "surname": surname.strip() or "-",
+                    "gender": gender.strip(),
+                    "company": company.strip(),
+                    "subsidiary_company": subsidiary_company.strip(),
+                    "role": role.strip(),
+                    "position": position.strip(),
+                    "position_type": position_type.strip(),
+                    "division": division.strip(),
+                    "department": department.strip(),
+                    "direction": direction.strip(),
+                    "branch": branch.strip(),
+                }
+                update_participant_by_id(int(selected_pid), payload)
+                st.success("Participant updated.")
+                st.rerun()
+
+        confirm_delete_participant = st.checkbox("I confirm deleting this participant and all related registrations")
+        if st.button("Delete Participant", type="secondary", use_container_width=False) and confirm_delete_participant:
+            delete_participant_by_id(int(selected_pid))
+            st.success("Participant deleted.")
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("Registration Manager")
+    registrations_df = get_registrations_admin_dataframe()
+    reg_search = st.text_input("Search registration (name, training, code)")
+    if reg_search.strip():
+        r_mask = (
+            registrations_df["full_name"].astype(str).str.contains(reg_search, case=False, na=False)
+            | registrations_df["training_program"].astype(str).str.contains(reg_search, case=False, na=False)
+            | registrations_df["training_code"].astype(str).str.contains(reg_search, case=False, na=False)
+        )
+        registrations_view = registrations_df[r_mask].copy()
+    else:
+        registrations_view = registrations_df.copy()
+
+    st.dataframe(registrations_view, use_container_width=True, hide_index=True)
+    if not registrations_view.empty:
+        selected_rid = st.selectbox(
+            "Select registration ID to edit",
+            options=registrations_view["registration_id"].tolist(),
+        )
+        selected_registration = registrations_df[registrations_df["registration_id"] == selected_rid].iloc[0]
+
+        with st.form("registration_edit_form"):
+            rc1, rc2, rc3 = st.columns(3)
+            with rc1:
+                training_program = st.text_input("Training Program", value=safe_text(selected_registration["training_program"]))
+                training_group = st.text_input("Training Group", value=safe_text(selected_registration["training_group"]))
+                training_code = st.text_input("Training Code", value=safe_text(selected_registration["training_code"]))
+            with rc2:
+                training_format = st.text_input("Training Format", value=safe_text(selected_registration["training_format"]))
+                training_status = st.text_input("Training Status", value=safe_text(selected_registration["training_status"]))
+                start_date = st.text_input("Start Date", value=safe_text(selected_registration["start_date"]))
+            with rc3:
+                end_date = st.text_input("End Date", value=safe_text(selected_registration["end_date"]))
+                amount = st.text_input("Amount", value=safe_text(selected_registration["amount"]))
+
+            if st.form_submit_button("Update Registration", type="primary"):
+                payload = {
+                    "training_program": training_program.strip(),
+                    "training_group": training_group.strip(),
+                    "training_code": training_code.strip(),
+                    "training_format": training_format.strip(),
+                    "training_status": training_status.strip(),
+                    "start_date": start_date.strip(),
+                    "end_date": end_date.strip(),
+                    "amount": amount.strip(),
+                }
+                update_registration_by_id(int(selected_rid), payload)
+                st.success("Registration updated.")
+                st.rerun()
+
+        confirm_delete_registration = st.checkbox("I confirm deleting this registration")
+        if st.button("Delete Registration", type="secondary") and confirm_delete_registration:
+            delete_registration_by_id(int(selected_rid))
+            st.success("Registration deleted.")
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("Group Manager")
+    groups_df = get_training_groups()
+    st.dataframe(groups_df, use_container_width=True, hide_index=True)
+    if not groups_df.empty:
+        selected_group_name = st.selectbox("Select group to delete", options=groups_df["group_name"].tolist())
+        confirm_delete_group = st.checkbox("I confirm deleting selected group")
+        if st.button("Delete Group", type="secondary") and confirm_delete_group:
+            delete_training_group(selected_group_name)
+            st.success("Group deleted.")
+            st.rerun()
+
+    st.markdown("---")
+    st.subheader("Admin Export")
+    participants_export = get_participants_admin_dataframe()
+    registrations_export = get_registrations_admin_dataframe()
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        participants_export.to_excel(writer, index=False, sheet_name="Participants")
+        registrations_export.to_excel(writer, index=False, sheet_name="Registrations")
+    st.download_button(
+        "Download Admin Workbook (.xlsx)",
+        data=output.getvalue(),
+        file_name=f"academy_admin_export_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
+    )
+
+
 export_df = get_export_dataframe()
-tab_dashboard, tab_import, tab_manual, tab_groups, tab_export = st.tabs(
-    ["Dashboard", "Bulk Import", "Manual Entry", "Groups", "Export"]
+tab_dashboard, tab_import, tab_manual, tab_groups, tab_export, tab_admin = st.tabs(
+    ["Dashboard", "Bulk Import", "Manual Entry", "Groups", "Export", "Admin Panel"]
 )
 
 with tab_dashboard:
@@ -347,3 +550,6 @@ with tab_groups:
 
 with tab_export:
     render_export(export_df)
+
+with tab_admin:
+    render_admin_panel()

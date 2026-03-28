@@ -558,3 +558,159 @@ def add_manual_registration(participant: dict, programs: Iterable[str], training
                 "amount": participant.get("amount"),
             }
             register_training(conn, participant_id, program, training_group, details)
+
+
+def get_participants_admin_dataframe() -> pd.DataFrame:
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT
+                id AS participant_id,
+                id_number,
+                COALESCE(NULLIF(full_name, ''), TRIM(name || ' ' || surname)) AS full_name,
+                name,
+                surname,
+                gender,
+                company,
+                subsidiary_company,
+                role,
+                position,
+                position_type,
+                division,
+                department,
+                direction,
+                branch
+            FROM participants
+            ORDER BY surname, name
+            """,
+            conn,
+        )
+
+
+def update_participant_by_id(participant_id: int, payload: dict) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            UPDATE participants
+            SET
+                id_number = ?,
+                full_name = ?,
+                name = ?,
+                surname = ?,
+                gender = ?,
+                company = ?,
+                subsidiary_company = ?,
+                role = ?,
+                position = ?,
+                position_type = ?,
+                division = ?,
+                department = ?,
+                direction = ?,
+                branch = ?
+            WHERE id = ?
+            """,
+            (
+                payload.get("id_number"),
+                payload.get("full_name"),
+                payload.get("name"),
+                payload.get("surname"),
+                payload.get("gender"),
+                payload.get("company"),
+                payload.get("subsidiary_company"),
+                payload.get("role"),
+                payload.get("position"),
+                payload.get("position_type"),
+                payload.get("division"),
+                payload.get("department"),
+                payload.get("direction"),
+                payload.get("branch"),
+                participant_id,
+            ),
+        )
+
+
+def delete_participant_by_id(participant_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM participants WHERE id = ?", (participant_id,))
+
+
+def get_registrations_admin_dataframe() -> pd.DataFrame:
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT
+                pt.id AS registration_id,
+                p.id AS participant_id,
+                p.id_number,
+                COALESCE(NULLIF(p.full_name, ''), TRIM(p.name || ' ' || p.surname)) AS full_name,
+                tp.program_name AS training_program,
+                COALESCE(tg.group_name, '') AS training_group,
+                pt.training_code,
+                pt.training_format,
+                pt.training_status,
+                pt.start_date,
+                pt.end_date,
+                pt.amount,
+                pt.registered_at
+            FROM participant_trainings pt
+            JOIN participants p ON p.id = pt.participant_id
+            JOIN training_programs tp ON tp.id = pt.training_program_id
+            LEFT JOIN training_groups tg ON tg.id = pt.training_group_id
+            ORDER BY pt.registered_at DESC
+            """,
+            conn,
+        )
+
+
+def update_registration_by_id(registration_id: int, payload: dict) -> None:
+    training_program = str(payload.get("training_program", "")).strip()
+    if not training_program:
+        raise ValueError("Training program is required")
+
+    group_name = str(payload.get("training_group", "")).strip()
+
+    with get_connection() as conn:
+        program_id = _get_or_create_id(conn, "training_programs", "program_name", training_program)
+        group_id = None
+        if group_name:
+            group_id = _get_or_create_id(conn, "training_groups", "group_name", group_name)
+        amount_value = pd.to_numeric(payload.get("amount", None), errors="coerce")
+        if pd.isna(amount_value):
+            amount_value = None
+
+        conn.execute(
+            """
+            UPDATE participant_trainings
+            SET
+                training_program_id = ?,
+                training_group_id = ?,
+                training_code = ?,
+                training_format = ?,
+                training_status = ?,
+                start_date = ?,
+                end_date = ?,
+                amount = ?
+            WHERE id = ?
+            """,
+            (
+                program_id,
+                group_id,
+                (str(payload.get("training_code", "")).strip() or None),
+                (str(payload.get("training_format", "")).strip() or None),
+                (str(payload.get("training_status", "")).strip() or None),
+                _to_iso_datetime(payload.get("start_date")),
+                _to_iso_datetime(payload.get("end_date")),
+                amount_value,
+                registration_id,
+            ),
+        )
+
+
+def delete_registration_by_id(registration_id: int) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM participant_trainings WHERE id = ?", (registration_id,))
+
+
+def delete_training_group(group_name: str) -> None:
+    with get_connection() as conn:
+        conn.execute("DELETE FROM training_groups WHERE group_name = ?", (group_name.strip(),))
