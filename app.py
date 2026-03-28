@@ -124,102 +124,320 @@ def admin_auth_gate() -> bool:
 
 def render_dashboard(df: pd.DataFrame) -> None:
     st.subheader("Analytics Dashboard")
-    st.caption("Live overview of registrations, trends, and training performance.")
+    st.caption("Advanced view of performance, trends, segmentation, and data quality.")
 
     if df.empty:
         st.info("No data yet. Upload or manually register participants to view analytics.")
         return
 
-    total_registrations = len(df)
-    unique_participants = df["id_number"].nunique()
-    total_programs = df["training_program"].nunique()
-    total_groups = (df["training_group"].fillna("").str.strip() != "").sum()
+    analytics_df = df.copy()
+    text_cols = [
+        "training_program",
+        "training_group",
+        "branch",
+        "direction",
+        "training_status",
+        "training_format",
+        "gender",
+        "full_name",
+        "id_number",
+        "company",
+        "subsidiary_company",
+    ]
+    for col in text_cols:
+        if col in analytics_df.columns:
+            analytics_df[col] = analytics_df[col].fillna("").astype(str).str.strip()
 
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Total Registrations", f"{total_registrations:,}")
-    c2.metric("Unique Participants", f"{unique_participants:,}")
-    c3.metric("Training Programs", f"{total_programs:,}")
-    c4.metric("Grouped Registrations", f"{total_groups:,}")
+    analytics_df["amount_num"] = pd.to_numeric(analytics_df.get("amount"), errors="coerce").fillna(0)
+    analytics_df["start_dt"] = pd.to_datetime(analytics_df.get("start_date"), errors="coerce")
+    fallback_registered = pd.to_datetime(analytics_df.get("registered_at"), errors="coerce")
+    analytics_df["event_dt"] = analytics_df["start_dt"].where(analytics_df["start_dt"].notna(), fallback_registered)
 
-    charts_col_1, charts_col_2 = st.columns(2)
+    min_dt = analytics_df["event_dt"].dropna().min()
+    max_dt = analytics_df["event_dt"].dropna().max()
+    default_start = min_dt.date() if pd.notna(min_dt) else datetime.now().date()
+    default_end = max_dt.date() if pd.notna(max_dt) else datetime.now().date()
 
-    with charts_col_1:
-        st.markdown('<div class="mini-card">Top Training Programs</div>', unsafe_allow_html=True)
-        top_programs = (
-            df.groupby("training_program", as_index=False)
-            .size()
-            .rename(columns={"size": "registrations"})
-            .sort_values("registrations", ascending=False)
-            .head(10)
-            .set_index("training_program")
+    st.markdown('<div class="mini-card">Filters</div>', unsafe_allow_html=True)
+    f1, f2, f3, f4 = st.columns(4)
+    with f1:
+        date_range = st.date_input(
+            "Date Range",
+            value=(default_start, default_end),
         )
-        st.bar_chart(top_programs)
+    with f2:
+        branches = sorted([x for x in analytics_df.get("branch", pd.Series(dtype=str)).unique() if x])
+        selected_branches = st.multiselect("Branch", options=branches)
+    with f3:
+        programs = sorted([x for x in analytics_df.get("training_program", pd.Series(dtype=str)).unique() if x])
+        selected_programs = st.multiselect("Training Program", options=programs)
+    with f4:
+        statuses = sorted([x for x in analytics_df.get("training_status", pd.Series(dtype=str)).unique() if x])
+        selected_statuses = st.multiselect("Training Status", options=statuses)
 
-    with charts_col_2:
-        st.markdown('<div class="mini-card">Top Companies</div>', unsafe_allow_html=True)
-        company_source = df["company"].fillna("").astype(str).str.strip()
-        if "subsidiary_company" in df.columns:
-            subsidiary_source = df["subsidiary_company"].fillna("").astype(str).str.strip()
-            company_source = company_source.where(company_source != "", subsidiary_source)
-        top_companies = (
-            pd.DataFrame({"company": company_source})
-            .query("company != ''")
-            .groupby("company", as_index=False)
-            .size()
-            .rename(columns={"size": "registrations"})
-            .sort_values("registrations", ascending=False)
-            .head(10)
-            .set_index("company")
+    f5, f6, f7 = st.columns(3)
+    with f5:
+        directions = sorted([x for x in analytics_df.get("direction", pd.Series(dtype=str)).unique() if x])
+        selected_directions = st.multiselect("Direction", options=directions)
+    with f6:
+        formats = sorted([x for x in analytics_df.get("training_format", pd.Series(dtype=str)).unique() if x])
+        selected_formats = st.multiselect("Format", options=formats)
+    with f7:
+        genders = sorted([x for x in analytics_df.get("gender", pd.Series(dtype=str)).unique() if x])
+        selected_genders = st.multiselect("Gender", options=genders)
+
+    filtered = analytics_df.copy()
+    if isinstance(date_range, tuple) and len(date_range) == 2 and pd.notna(filtered["event_dt"]).any():
+        start, end = date_range
+        start_ts = pd.Timestamp(start)
+        end_ts = pd.Timestamp(end) + pd.Timedelta(days=1) - pd.Timedelta(seconds=1)
+        filtered = filtered[filtered["event_dt"].between(start_ts, end_ts, inclusive="both")]
+    if selected_branches:
+        filtered = filtered[filtered["branch"].isin(selected_branches)]
+    if selected_programs:
+        filtered = filtered[filtered["training_program"].isin(selected_programs)]
+    if selected_statuses:
+        filtered = filtered[filtered["training_status"].isin(selected_statuses)]
+    if selected_directions:
+        filtered = filtered[filtered["direction"].isin(selected_directions)]
+    if selected_formats:
+        filtered = filtered[filtered["training_format"].isin(selected_formats)]
+    if selected_genders:
+        filtered = filtered[filtered["gender"].isin(selected_genders)]
+
+    if filtered.empty:
+        st.warning("No records match current filters. Adjust filters to continue analysis.")
+        return
+
+    complete_terms = {"completed", "\u10d3\u10d0\u10e1\u10e0\u10e3\u10da\u10d4\u10d1\u10e3\u10da\u10d8"}
+    status_lower = filtered["training_status"].str.lower()
+    completed_count = int(status_lower.isin(complete_terms).sum())
+
+    total_registrations = len(filtered)
+    unique_participants = filtered["id_number"].replace("", pd.NA).dropna().nunique()
+    repeat_ratio = (total_registrations - unique_participants) / total_registrations if total_registrations else 0
+    completion_rate = completed_count / total_registrations if total_registrations else 0
+    total_revenue = float(filtered["amount_num"].sum())
+    avg_revenue = float(filtered["amount_num"].mean()) if total_registrations else 0.0
+    avg_trainings_per_participant = float(total_registrations / unique_participants) if unique_participants else 0.0
+    grouped_registrations = int((filtered["training_group"] != "").sum())
+
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Registrations", f"{total_registrations:,}")
+    k2.metric("Unique Participants", f"{unique_participants:,}")
+    k3.metric("Total Revenue", f"{total_revenue:,.2f}")
+    k4.metric("Avg Revenue / Registration", f"{avg_revenue:,.2f}")
+
+    k5, k6, k7, k8 = st.columns(4)
+    k5.metric("Completion Rate", f"{completion_rate:.1%}")
+    k6.metric("Repeat Registration Rate", f"{repeat_ratio:.1%}")
+    k7.metric("Avg Trainings / Participant", f"{avg_trainings_per_participant:.2f}")
+    k8.metric("Grouped Registrations", f"{grouped_registrations:,}")
+
+    # period-over-period comparison against immediate previous equal-length window
+    if pd.notna(filtered["event_dt"]).any():
+        period_start = filtered["event_dt"].min().normalize()
+        period_end = filtered["event_dt"].max().normalize()
+        days = int((period_end - period_start).days) + 1
+        prev_end = period_start - pd.Timedelta(days=1)
+        prev_start = prev_end - pd.Timedelta(days=max(days - 1, 0))
+        previous = analytics_df[analytics_df["event_dt"].between(prev_start, prev_end, inclusive="both")]
+        prev_regs = len(previous)
+        prev_revenue = float(previous["amount_num"].sum()) if prev_regs else 0.0
+        prev_delta_regs = total_registrations - prev_regs
+        prev_delta_rev = total_revenue - prev_revenue
+        p1, p2 = st.columns(2)
+        p1.metric("Registrations vs Previous Period", f"{total_registrations:,}", delta=f"{prev_delta_regs:+,}")
+        p2.metric("Revenue vs Previous Period", f"{total_revenue:,.2f}", delta=f"{prev_delta_rev:+,.2f}")
+
+    tab_trends, tab_segments, tab_quality = st.tabs(["Trends", "Segments", "Data Quality"])
+
+    with tab_trends:
+        trend_left, trend_right = st.columns(2)
+        with trend_left:
+            st.markdown('<div class="mini-card">Monthly Registrations</div>', unsafe_allow_html=True)
+            monthly_regs = (
+                filtered.dropna(subset=["event_dt"])
+                .assign(month=lambda x: x["event_dt"].dt.to_period("M").astype(str))
+                .groupby("month", as_index=False)
+                .size()
+                .rename(columns={"size": "registrations"})
+                .set_index("month")
+            )
+            if monthly_regs.empty:
+                st.caption("No valid dates for trend analysis.")
+            else:
+                st.line_chart(monthly_regs)
+        with trend_right:
+            st.markdown('<div class="mini-card">Monthly Revenue</div>', unsafe_allow_html=True)
+            monthly_rev = (
+                filtered.dropna(subset=["event_dt"])
+                .assign(month=lambda x: x["event_dt"].dt.to_period("M").astype(str))
+                .groupby("month", as_index=False)["amount_num"]
+                .sum()
+                .rename(columns={"amount_num": "revenue"})
+                .set_index("month")
+            )
+            if monthly_rev.empty:
+                st.caption("No valid revenue dates for trend analysis.")
+            else:
+                st.area_chart(monthly_rev)
+
+        st.markdown('<div class="mini-card">Top Programs by Volume and Revenue</div>', unsafe_allow_html=True)
+        program_perf = (
+            filtered.groupby("training_program", as_index=False)
+            .agg(
+                registrations=("training_program", "size"),
+                unique_participants=("id_number", "nunique"),
+                revenue=("amount_num", "sum"),
+            )
+            .sort_values(["registrations", "revenue"], ascending=False)
+            .head(20)
         )
-        if top_companies.empty:
-            st.caption("No company data available yet.")
-        else:
-            st.bar_chart(top_companies)
+        st.dataframe(program_perf, use_container_width=True, hide_index=True)
 
-    trend_col, mix_col = st.columns(2)
-    with trend_col:
-        st.markdown('<div class="mini-card">Monthly Registration Trend</div>', unsafe_allow_html=True)
-        trend_df = df.copy()
-        trend_df["registered_at"] = pd.to_datetime(trend_df["registered_at"], errors="coerce")
-        trend_df["month"] = trend_df["registered_at"].dt.to_period("M").astype(str)
-        monthly = (
-            trend_df.dropna(subset=["registered_at"])
-            .groupby("month", as_index=False)
-            .size()
-            .rename(columns={"size": "registrations"})
-            .set_index("month")
+    with tab_segments:
+        seg1, seg2 = st.columns(2)
+        with seg1:
+            st.markdown('<div class="mini-card">Branch Performance</div>', unsafe_allow_html=True)
+            branch_perf = (
+                filtered[filtered["branch"] != ""]
+                .groupby("branch", as_index=False)
+                .agg(
+                    registrations=("branch", "size"),
+                    participants=("id_number", "nunique"),
+                    revenue=("amount_num", "sum"),
+                )
+                .sort_values("registrations", ascending=False)
+                .head(15)
+                .set_index("branch")
+            )
+            if branch_perf.empty:
+                st.caption("No branch data available.")
+            else:
+                st.bar_chart(branch_perf[["registrations"]])
+                st.dataframe(branch_perf.reset_index(), use_container_width=True, hide_index=True)
+        with seg2:
+            st.markdown('<div class="mini-card">Direction Performance</div>', unsafe_allow_html=True)
+            direction_perf = (
+                filtered[filtered["direction"] != ""]
+                .groupby("direction", as_index=False)
+                .agg(
+                    registrations=("direction", "size"),
+                    participants=("id_number", "nunique"),
+                    revenue=("amount_num", "sum"),
+                )
+                .sort_values("registrations", ascending=False)
+                .head(15)
+                .set_index("direction")
+            )
+            if direction_perf.empty:
+                st.caption("No direction data available.")
+            else:
+                st.bar_chart(direction_perf[["registrations"]])
+                st.dataframe(direction_perf.reset_index(), use_container_width=True, hide_index=True)
+
+        seg3, seg4 = st.columns(2)
+        with seg3:
+            st.markdown('<div class="mini-card">Status Mix</div>', unsafe_allow_html=True)
+            status_mix = (
+                filtered[filtered["training_status"] != ""]
+                .groupby("training_status", as_index=False)
+                .size()
+                .rename(columns={"size": "registrations"})
+                .sort_values("registrations", ascending=False)
+                .set_index("training_status")
+            )
+            if status_mix.empty:
+                st.caption("No status data available.")
+            else:
+                st.bar_chart(status_mix)
+        with seg4:
+            st.markdown('<div class="mini-card">Format Mix</div>', unsafe_allow_html=True)
+            format_mix = (
+                filtered[filtered["training_format"] != ""]
+                .groupby("training_format", as_index=False)
+                .size()
+                .rename(columns={"size": "registrations"})
+                .sort_values("registrations", ascending=False)
+                .set_index("training_format")
+            )
+            if format_mix.empty:
+                st.caption("No format data available.")
+            else:
+                st.bar_chart(format_mix)
+
+        st.markdown('<div class="mini-card">Top Participants by Number of Trainings</div>', unsafe_allow_html=True)
+        participant_load = (
+            filtered[filtered["id_number"] != ""]
+            .groupby(["id_number", "full_name"], as_index=False)
+            .agg(
+                trainings=("training_program", "size"),
+                revenue=("amount_num", "sum"),
+            )
+            .sort_values("trainings", ascending=False)
+            .head(25)
         )
-        if monthly.empty:
-            st.caption("Not enough timestamp data yet.")
-        else:
-            st.line_chart(monthly)
+        st.dataframe(participant_load, use_container_width=True, hide_index=True)
 
-    with mix_col:
-        st.markdown('<div class="mini-card">Gender Distribution</div>', unsafe_allow_html=True)
-        gender_mix = (
-            df[df["gender"].fillna("").str.strip() != ""]
-            .groupby("gender", as_index=False)
-            .size()
-            .rename(columns={"size": "registrations"})
-            .set_index("gender")
-        )
-        if gender_mix.empty:
-            st.caption("No gender values entered yet.")
-        else:
-            st.bar_chart(gender_mix)
+    with tab_quality:
+        st.markdown('<div class="mini-card">Field Completeness</div>', unsafe_allow_html=True)
+        completeness_cols = [
+            "id_number",
+            "full_name",
+            "training_program",
+            "training_code",
+            "start_date",
+            "end_date",
+            "training_status",
+            "training_format",
+            "branch",
+            "direction",
+            "amount_num",
+        ]
+        available_cols = [c for c in completeness_cols if c in filtered.columns]
+        completeness_rows = []
+        for col in available_cols:
+            if col == "amount_num":
+                missing = int((filtered[col] == 0).sum())
+            else:
+                missing = int(filtered[col].isna().sum() + (filtered[col].astype(str).str.strip() == "").sum())
+            completeness_rows.append(
+                {
+                    "field": col,
+                    "missing_records": missing,
+                    "missing_percent": round(missing / len(filtered) * 100, 2),
+                }
+            )
+        completeness_df = pd.DataFrame(completeness_rows).sort_values("missing_percent", ascending=False)
+        st.dataframe(completeness_df, use_container_width=True, hide_index=True)
 
-    group_breakdown = (
-        df[df["training_group"].fillna("").str.strip() != ""]
-        .groupby("training_group", as_index=False)
-        .size()
-        .rename(columns={"size": "registrations"})
-        .sort_values("registrations", ascending=False)
-    )
-    st.markdown('<div class="mini-card">Training Group Performance</div>', unsafe_allow_html=True)
-    if group_breakdown.empty:
-        st.caption("No training groups assigned yet.")
-    else:
-        st.dataframe(group_breakdown, use_container_width=True)
+        q1, q2 = st.columns(2)
+        with q1:
+            st.markdown('<div class="mini-card">Potential ID Quality Issues</div>', unsafe_allow_html=True)
+            invalid_ids = filtered[
+                (filtered["id_number"].astype(str).str.strip() == "")
+                | (~filtered["id_number"].astype(str).str.fullmatch(r"[0-9]{11}", na=False))
+            ]
+            st.metric("Potentially Invalid IDs", f"{len(invalid_ids):,}")
+            if not invalid_ids.empty:
+                st.dataframe(
+                    invalid_ids[["id_number", "full_name", "training_program"]].head(20),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+        with q2:
+            st.markdown('<div class="mini-card">Duplicate Name Per ID Check</div>', unsafe_allow_html=True)
+            duplicates = (
+                filtered[filtered["id_number"] != ""]
+                .groupby("id_number")["full_name"]
+                .nunique()
+                .reset_index(name="distinct_names")
+            )
+            duplicates = duplicates[duplicates["distinct_names"] > 1].sort_values("distinct_names", ascending=False)
+            st.metric("IDs Linked to Multiple Names", f"{len(duplicates):,}")
+            if not duplicates.empty:
+                st.dataframe(duplicates.head(20), use_container_width=True, hide_index=True)
 
 
 def render_import_section() -> None:
