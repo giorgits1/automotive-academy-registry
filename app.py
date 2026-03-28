@@ -116,8 +116,13 @@ def render_dashboard(df: pd.DataFrame) -> None:
 
     with charts_col_2:
         st.markdown('<div class="mini-card">Top Companies</div>', unsafe_allow_html=True)
+        company_source = df["company"].fillna("").astype(str).str.strip()
+        if "subsidiary_company" in df.columns:
+            subsidiary_source = df["subsidiary_company"].fillna("").astype(str).str.strip()
+            company_source = company_source.where(company_source != "", subsidiary_source)
         top_companies = (
-            df[df["company"].fillna("").str.strip() != ""]
+            pd.DataFrame({"company": company_source})
+            .query("company != ''")
             .groupby("company", as_index=False)
             .size()
             .rename(columns={"size": "registrations"})
@@ -189,6 +194,10 @@ def render_import_section() -> None:
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         use_container_width=True,
     )
+    st.caption(
+        "Supports both your existing Georgian headers (e.g. `საიდ.კოდი`, `ტრენინგის კოდი`, `დაწყება`) "
+        "and English template headers."
+    )
     st.caption("For multiple programs, separate names with commas in `training_programs` column.")
 
     uploaded_file = st.file_uploader("Upload completed participant Excel", type=["xlsx", "xls"])
@@ -215,20 +224,41 @@ def render_manual_registration() -> None:
     st.caption("Register a participant and assign one or more trainings instantly.")
 
     with st.form("manual_registration_form", clear_on_submit=True):
-        col_1, col_2 = st.columns(2)
+        col_1, col_2, col_3 = st.columns(3)
         with col_1:
             name = st.text_input("Name")
             surname = st.text_input("Surname")
+            full_name = st.text_input("Full Name")
             id_number = st.text_input("ID number")
             company = st.text_input("Company")
         with col_2:
-            role = st.text_input("Role")
+            subsidiary_company = st.text_input("Subsidiary Company")
+            role = st.text_input("Role / Position")
+            position = st.text_input("Position")
+            position_type = st.text_input("Position Type")
+            division = st.text_input("Division")
+        with col_3:
+            department = st.text_input("Department")
+            direction = st.text_input("Direction")
+            branch = st.text_input("Branch")
             gender = st.selectbox("Gender", ["", "Female", "Male", "Other"])
             training_group = st.text_input("Training group (optional)")
+
+        st.markdown("Training Details")
+        td_1, td_2, td_3 = st.columns(3)
+        with td_1:
             training_programs_raw = st.text_input(
                 "Training programs (comma separated)",
                 placeholder="Engine Diagnostics, EV Safety",
             )
+            training_code = st.text_input("Training Code")
+        with td_2:
+            training_format = st.text_input("Training Format", placeholder="F2F / Online")
+            training_status = st.text_input("Training Status", placeholder="Completed")
+        with td_3:
+            start_date = st.text_input("Start Date", placeholder="2026-03-25")
+            end_date = st.text_input("End Date", placeholder="2026-03-25")
+            amount = st.number_input("Amount", min_value=0.0, step=1.0, value=0.0)
 
         submitted = st.form_submit_button("Save Registration", type="primary")
         if submitted:
@@ -237,9 +267,23 @@ def render_manual_registration() -> None:
                     "name": name.strip(),
                     "surname": surname.strip(),
                     "id_number": id_number.strip(),
+                    "full_name": full_name.strip(),
                     "company": company.strip(),
+                    "subsidiary_company": subsidiary_company.strip(),
                     "role": role.strip(),
+                    "position": position.strip(),
+                    "position_type": position_type.strip(),
+                    "division": division.strip(),
+                    "department": department.strip(),
+                    "direction": direction.strip(),
+                    "branch": branch.strip(),
                     "gender": gender.strip(),
+                    "training_code": training_code.strip(),
+                    "training_format": training_format.strip(),
+                    "training_status": training_status.strip(),
+                    "start_date": start_date.strip(),
+                    "end_date": end_date.strip(),
+                    "amount": float(amount) if amount else None,
                 }
                 programs = [p.strip() for p in training_programs_raw.split(",") if p.strip()]
                 add_manual_registration(participant, programs, training_group.strip() or None)
