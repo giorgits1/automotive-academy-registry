@@ -18,8 +18,60 @@ from database import (
 st.set_page_config(page_title="Automotive Academy Registry", layout="wide")
 init_db()
 
-st.title("Automotive Academy Participant Registry")
-st.caption("Manage participants, trainings, and groups without Excel macros.")
+st.markdown(
+    """
+    <style>
+    @import url('https://fonts.googleapis.com/css2?family=Manrope:wght@400;600;700;800&display=swap');
+
+    html, body, [class*="css"]  {
+        font-family: 'Manrope', sans-serif;
+    }
+
+    .stApp {
+        background:
+            radial-gradient(circle at 10% 20%, rgba(34,197,94,0.14), transparent 40%),
+            radial-gradient(circle at 85% 10%, rgba(245,158,11,0.18), transparent 35%),
+            linear-gradient(135deg, #f5f7fa 0%, #eef2f5 100%);
+    }
+
+    .header-card {
+        background: #0f172a;
+        border-radius: 18px;
+        padding: 1.1rem 1.4rem;
+        color: #f8fafc;
+        box-shadow: 0 8px 22px rgba(2,6,23,.18);
+        animation: fadeIn .6s ease-out;
+    }
+
+    .mini-card {
+        background: white;
+        border-radius: 14px;
+        padding: .9rem 1rem;
+        border: 1px solid #e2e8f0;
+        box-shadow: 0 4px 14px rgba(15, 23, 42, 0.06);
+        animation: fadeIn .5s ease-out;
+    }
+
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(8px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
+st.markdown(
+    """
+    <div class="header-card">
+        <h2 style="margin:0;">Automotive Academy Command Center</h2>
+        <p style="margin:.3rem 0 0 0; color:#cbd5e1;">
+            Upload participants, manage training groups, and track academy performance in one place.
+        </p>
+    </div>
+    """,
+    unsafe_allow_html=True,
+)
 
 
 def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str) -> bytes:
@@ -29,104 +81,225 @@ def dataframe_to_excel_bytes(df: pd.DataFrame, sheet_name: str) -> bytes:
     return output.getvalue()
 
 
-with st.expander("1) Download Excel template", expanded=True):
+def render_dashboard(df: pd.DataFrame) -> None:
+    st.subheader("Analytics Dashboard")
+    st.caption("Live overview of registrations, trends, and training performance.")
+
+    if df.empty:
+        st.info("No data yet. Upload or manually register participants to view analytics.")
+        return
+
+    total_registrations = len(df)
+    unique_participants = df["id_number"].nunique()
+    total_programs = df["training_program"].nunique()
+    total_groups = (df["training_group"].fillna("").str.strip() != "").sum()
+
+    c1, c2, c3, c4 = st.columns(4)
+    c1.metric("Total Registrations", f"{total_registrations:,}")
+    c2.metric("Unique Participants", f"{unique_participants:,}")
+    c3.metric("Training Programs", f"{total_programs:,}")
+    c4.metric("Grouped Registrations", f"{total_groups:,}")
+
+    charts_col_1, charts_col_2 = st.columns(2)
+
+    with charts_col_1:
+        st.markdown('<div class="mini-card">Top Training Programs</div>', unsafe_allow_html=True)
+        top_programs = (
+            df.groupby("training_program", as_index=False)
+            .size()
+            .rename(columns={"size": "registrations"})
+            .sort_values("registrations", ascending=False)
+            .head(10)
+            .set_index("training_program")
+        )
+        st.bar_chart(top_programs)
+
+    with charts_col_2:
+        st.markdown('<div class="mini-card">Top Companies</div>', unsafe_allow_html=True)
+        top_companies = (
+            df[df["company"].fillna("").str.strip() != ""]
+            .groupby("company", as_index=False)
+            .size()
+            .rename(columns={"size": "registrations"})
+            .sort_values("registrations", ascending=False)
+            .head(10)
+            .set_index("company")
+        )
+        if top_companies.empty:
+            st.caption("No company data available yet.")
+        else:
+            st.bar_chart(top_companies)
+
+    trend_col, mix_col = st.columns(2)
+    with trend_col:
+        st.markdown('<div class="mini-card">Monthly Registration Trend</div>', unsafe_allow_html=True)
+        trend_df = df.copy()
+        trend_df["registered_at"] = pd.to_datetime(trend_df["registered_at"], errors="coerce")
+        trend_df["month"] = trend_df["registered_at"].dt.to_period("M").astype(str)
+        monthly = (
+            trend_df.dropna(subset=["registered_at"])
+            .groupby("month", as_index=False)
+            .size()
+            .rename(columns={"size": "registrations"})
+            .set_index("month")
+        )
+        if monthly.empty:
+            st.caption("Not enough timestamp data yet.")
+        else:
+            st.line_chart(monthly)
+
+    with mix_col:
+        st.markdown('<div class="mini-card">Gender Distribution</div>', unsafe_allow_html=True)
+        gender_mix = (
+            df[df["gender"].fillna("").str.strip() != ""]
+            .groupby("gender", as_index=False)
+            .size()
+            .rename(columns={"size": "registrations"})
+            .set_index("gender")
+        )
+        if gender_mix.empty:
+            st.caption("No gender values entered yet.")
+        else:
+            st.bar_chart(gender_mix)
+
+    group_breakdown = (
+        df[df["training_group"].fillna("").str.strip() != ""]
+        .groupby("training_group", as_index=False)
+        .size()
+        .rename(columns={"size": "registrations"})
+        .sort_values("registrations", ascending=False)
+    )
+    st.markdown('<div class="mini-card">Training Group Performance</div>', unsafe_allow_html=True)
+    if group_breakdown.empty:
+        st.caption("No training groups assigned yet.")
+    else:
+        st.dataframe(group_breakdown, use_container_width=True)
+
+
+def render_import_section() -> None:
+    st.subheader("Bulk Import")
+    st.caption("Use template-driven Excel uploads for fast participant registration.")
+
     template_df = create_template_dataframe()
     template_bytes = dataframe_to_excel_bytes(template_df, "Template")
-
     st.download_button(
-        label="Download Participant Template (.xlsx)",
+        label="Download Excel Template",
         data=template_bytes,
         file_name="participant_upload_template.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
     )
+    st.caption("For multiple programs, separate names with commas in `training_programs` column.")
 
-    st.info(
-        "Use comma-separated values inside 'training_programs' for participants who completed multiple trainings."
-    )
+    uploaded_file = st.file_uploader("Upload completed participant Excel", type=["xlsx", "xls"])
+    if uploaded_file is None:
+        return
 
+    try:
+        raw_df = pd.read_excel(uploaded_file)
+        normalized_df = normalize_upload_dataframe(raw_df)
+        st.dataframe(normalized_df.head(25), use_container_width=True)
 
-with st.expander("2) Upload completed Excel file", expanded=True):
-    uploaded_file = st.file_uploader("Upload an Excel file", type=["xlsx", "xls"])
-
-    if uploaded_file is not None:
-        try:
-            raw_df = pd.read_excel(uploaded_file)
-            normalized_df = normalize_upload_dataframe(raw_df)
-
-            st.write("Preview of normalized upload")
-            st.dataframe(normalized_df.head(20), use_container_width=True)
-
-            if st.button("Import file into database", type="primary"):
-                participants_count, registrations_count = import_from_dataframe(normalized_df)
-                st.success(
-                    f"Import complete. Processed participants: {participants_count}. "
-                    f"Training registrations created/updated: {registrations_count}."
-                )
-        except Exception as exc:
-            st.error(f"Import failed: {exc}")
+        if st.button("Import Into Database", type="primary"):
+            participants_count, registrations_count = import_from_dataframe(normalized_df)
+            st.success(
+                f"Import complete. Processed participants: {participants_count}. "
+                f"Training registrations created/updated: {registrations_count}."
+            )
+    except Exception as exc:
+        st.error(f"Import failed: {exc}")
 
 
-left_col, right_col = st.columns(2)
+def render_manual_registration() -> None:
+    st.subheader("Manual Registration")
+    st.caption("Register a participant and assign one or more trainings instantly.")
 
-with left_col:
-    with st.expander("3) Register training groups", expanded=True):
-        group_name = st.text_input("New training group name", placeholder="e.g., Summer-2026 Group B")
-        if st.button("Create group"):
-            create_training_group(group_name)
-            st.success("Group saved.")
-
-        groups_df = get_training_groups()
-        if groups_df.empty:
-            st.caption("No groups registered yet.")
-        else:
-            st.dataframe(groups_df, use_container_width=True)
-
-with right_col:
-    with st.expander("4) Manual participant registration", expanded=True):
-        with st.form("manual_registration_form"):
+    with st.form("manual_registration_form", clear_on_submit=True):
+        col_1, col_2 = st.columns(2)
+        with col_1:
             name = st.text_input("Name")
             surname = st.text_input("Surname")
             id_number = st.text_input("ID number")
             company = st.text_input("Company")
+        with col_2:
             role = st.text_input("Role")
             gender = st.selectbox("Gender", ["", "Female", "Male", "Other"])
+            training_group = st.text_input("Training group (optional)")
             training_programs_raw = st.text_input(
                 "Training programs (comma separated)",
                 placeholder="Engine Diagnostics, EV Safety",
             )
-            training_group = st.text_input("Training group (optional)")
 
-            submitted = st.form_submit_button("Register participant")
-            if submitted:
-                try:
-                    participant = {
-                        "name": name.strip(),
-                        "surname": surname.strip(),
-                        "id_number": id_number.strip(),
-                        "company": company.strip(),
-                        "role": role.strip(),
-                        "gender": gender.strip(),
-                    }
-                    programs = [p.strip() for p in training_programs_raw.split(",") if p.strip()]
-                    add_manual_registration(participant, programs, training_group.strip() or None)
-                    st.success("Participant registration saved.")
-                except Exception as exc:
-                    st.error(f"Could not save registration: {exc}")
+        submitted = st.form_submit_button("Save Registration", type="primary")
+        if submitted:
+            try:
+                participant = {
+                    "name": name.strip(),
+                    "surname": surname.strip(),
+                    "id_number": id_number.strip(),
+                    "company": company.strip(),
+                    "role": role.strip(),
+                    "gender": gender.strip(),
+                }
+                programs = [p.strip() for p in training_programs_raw.split(",") if p.strip()]
+                add_manual_registration(participant, programs, training_group.strip() or None)
+                st.success("Participant registration saved.")
+            except Exception as exc:
+                st.error(f"Could not save registration: {exc}")
 
 
-st.markdown("---")
-st.subheader("5) Export registered data")
-export_df = get_export_dataframe()
+def render_groups() -> None:
+    st.subheader("Training Groups")
+    st.caption("Create groups and monitor registration volume by cohort.")
 
-if export_df.empty:
-    st.caption("No registrations yet. Upload or register participants first.")
-else:
-    st.dataframe(export_df, use_container_width=True)
+    group_name = st.text_input("New training group name", placeholder="e.g., Summer-2026 Group B")
+    if st.button("Create Group"):
+        create_training_group(group_name)
+        st.success("Group saved.")
 
-    export_bytes = dataframe_to_excel_bytes(export_df, "Registrations")
+    groups_df = get_training_groups()
+    if groups_df.empty:
+        st.caption("No groups registered yet.")
+        return
+    st.dataframe(groups_df, use_container_width=True)
+
+
+def render_export(df: pd.DataFrame) -> None:
+    st.subheader("Data Export")
+    st.caption("Download all registrations at any time for reporting.")
+
+    if df.empty:
+        st.caption("No registrations yet. Upload or register participants first.")
+        return
+
+    st.dataframe(df, use_container_width=True)
+
+    export_bytes = dataframe_to_excel_bytes(df, "Registrations")
     st.download_button(
-        label="Download all registrations (.xlsx)",
+        label="Download Full Registration Report (.xlsx)",
         data=export_bytes,
         file_name=f"academy_registrations_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        use_container_width=True,
     )
+
+
+export_df = get_export_dataframe()
+tab_dashboard, tab_import, tab_manual, tab_groups, tab_export = st.tabs(
+    ["Dashboard", "Bulk Import", "Manual Entry", "Groups", "Export"]
+)
+
+with tab_dashboard:
+    render_dashboard(export_df)
+
+with tab_import:
+    render_import_section()
+
+with tab_manual:
+    render_manual_registration()
+
+with tab_groups:
+    render_groups()
+
+with tab_export:
+    render_export(export_df)
