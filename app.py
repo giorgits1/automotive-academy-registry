@@ -7,18 +7,23 @@ import streamlit as st
 
 from database import (
     add_manual_registration,
+    add_delivered_training_program,
     clear_all_registry_data,
     create_template_dataframe,
+    create_delivered_programs_template_dataframe,
     delete_participant_by_id,
     delete_registration_by_id,
     delete_training_group,
     create_training_group,
+    get_delivered_training_programs_dataframe,
     get_export_dataframe,
     get_participants_admin_dataframe,
     get_registrations_admin_dataframe,
     get_training_groups,
+    import_delivered_training_programs_from_dataframe,
     import_from_dataframe,
     init_db,
+    normalize_delivered_programs_upload_dataframe,
     normalize_upload_dataframe,
     update_participant_by_id,
     update_registration_by_id,
@@ -587,6 +592,186 @@ def render_export(df: pd.DataFrame) -> None:
     )
 
 
+def render_delivered_programs_section() -> None:
+    st.subheader("Conducted Training Programs")
+    st.caption("Register delivered programs, upload in bulk, and analyze delivery performance.")
+
+    delivered_df = get_delivered_training_programs_dataframe()
+    subtab_register, subtab_bulk, subtab_analytics = st.tabs(
+        ["Register Program", "Bulk Upload", "Analytics"]
+    )
+
+    with subtab_register:
+        with st.form("delivered_program_form", clear_on_submit=True):
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                training_type = st.text_input("Type")
+                direction = st.text_input("Direction")
+                training_name = st.text_input("Training Name")
+                training_format = st.text_input("Format")
+                sale_type = st.text_input("Sale Type")
+            with c2:
+                client_company = st.text_input("Client / Company")
+                start_date = st.text_input("Start Date", placeholder="2026-03-01")
+                end_date = st.text_input("End Date", placeholder="2026-03-03")
+                duration = st.number_input("Duration (hours)", min_value=0.0, step=1.0, value=0.0)
+            with c3:
+                trainer = st.text_input("Trainer")
+                participants_count = st.number_input("Number of Participants", min_value=0, step=1, value=0)
+                satis_rate = st.number_input("Satis. Survey Rate", min_value=0.0, max_value=1.0, step=0.01, value=0.0)
+                revenue = st.number_input("Revenue", min_value=0.0, step=1.0, value=0.0)
+                branch = st.text_input("Branch")
+
+            if st.form_submit_button("Save Delivered Program", type="primary"):
+                try:
+                    payload = {
+                        "type": training_type.strip(),
+                        "direction": direction.strip(),
+                        "training_name": training_name.strip(),
+                        "format": training_format.strip(),
+                        "sale_type": sale_type.strip(),
+                        "client_company": client_company.strip(),
+                        "start_date": start_date.strip(),
+                        "end_date": end_date.strip(),
+                        "duration": duration,
+                        "trainer": trainer.strip(),
+                        "number_of_participants": participants_count,
+                        "satis_survey_rate": satis_rate,
+                        "revenue": revenue,
+                        "branch": branch.strip(),
+                    }
+                    add_delivered_training_program(payload)
+                    st.success("Delivered training program saved.")
+                    st.rerun()
+                except Exception as exc:
+                    st.error(f"Could not save record: {exc}")
+
+        st.dataframe(delivered_df, use_container_width=True, hide_index=True)
+
+    with subtab_bulk:
+        template_df = create_delivered_programs_template_dataframe()
+        template_bytes = dataframe_to_excel_bytes(template_df, "Conducted_Programs_Template")
+        st.download_button(
+            label="Download Bulk Upload Template (.xlsx)",
+            data=template_bytes,
+            file_name="conducted_training_programs_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
+        st.caption(
+            "Expected headers: Type, direction, training name, format, sale type, client/company, "
+            "start date, end date, duration, trainer, number of participants, satis. survey rate, revenue, branch."
+        )
+
+        uploaded = st.file_uploader(
+            "Upload Conducted Programs Excel",
+            type=["xlsx", "xls"],
+            key="conducted_programs_upload",
+        )
+        if uploaded is not None:
+            try:
+                raw_df = pd.read_excel(uploaded)
+                normalized_df = normalize_delivered_programs_upload_dataframe(raw_df)
+                st.dataframe(normalized_df.head(30), use_container_width=True)
+                if st.button("Import Conducted Programs", type="primary"):
+                    inserted = import_delivered_training_programs_from_dataframe(normalized_df)
+                    st.success(f"Import complete. Inserted records: {inserted}.")
+                    st.rerun()
+            except Exception as exc:
+                st.error(f"Import failed: {exc}")
+
+    with subtab_analytics:
+        st.markdown('<div class="mini-card">Conducted Programs Analytics</div>', unsafe_allow_html=True)
+        if delivered_df.empty:
+            st.info("No conducted program records yet.")
+            return
+
+        analytics = delivered_df.copy()
+        for col in ["type", "direction", "training_name", "format", "sale_type", "client_company", "trainer", "branch"]:
+            if col in analytics.columns:
+                analytics[col] = analytics[col].fillna("").astype(str).str.strip()
+        analytics["start_dt"] = pd.to_datetime(analytics.get("start_date"), errors="coerce")
+        analytics["end_dt"] = pd.to_datetime(analytics.get("end_date"), errors="coerce")
+        analytics["duration_num"] = pd.to_numeric(analytics.get("duration"), errors="coerce").fillna(0)
+        analytics["participants_num"] = pd.to_numeric(analytics.get("number_of_participants"), errors="coerce").fillna(0)
+        analytics["satis_num"] = pd.to_numeric(analytics.get("satis_survey_rate"), errors="coerce")
+        analytics["revenue_num"] = pd.to_numeric(analytics.get("revenue"), errors="coerce").fillna(0)
+
+        a1, a2, a3, a4 = st.columns(4)
+        a1.metric("Programs Delivered", f"{len(analytics):,}")
+        a2.metric("Total Participants", f"{int(analytics['participants_num'].sum()):,}")
+        a3.metric("Total Revenue", f"{float(analytics['revenue_num'].sum()):,.2f}")
+        a4.metric("Avg Satisfaction Rate", f"{float(analytics['satis_num'].mean()):.2%}" if analytics["satis_num"].notna().any() else "N/A")
+
+        b1, b2, b3 = st.columns(3)
+        b1.metric("Avg Participants / Program", f"{float(analytics['participants_num'].mean()):.2f}")
+        b2.metric("Avg Duration (hours)", f"{float(analytics['duration_num'].mean()):.2f}")
+        b3.metric("Revenue / Participant", f"{float(analytics['revenue_num'].sum() / max(analytics['participants_num'].sum(), 1)):.2f}")
+
+        ch1, ch2 = st.columns(2)
+        with ch1:
+            st.markdown('<div class="mini-card">Top Training Names</div>', unsafe_allow_html=True)
+            top_names = (
+                analytics[analytics["training_name"] != ""]
+                .groupby("training_name", as_index=False)
+                .agg(programs=("training_name", "size"), revenue=("revenue_num", "sum"))
+                .sort_values(["programs", "revenue"], ascending=False)
+                .head(12)
+                .set_index("training_name")
+            )
+            if top_names.empty:
+                st.caption("No training names found.")
+            else:
+                st.bar_chart(top_names[["programs"]])
+
+        with ch2:
+            st.markdown('<div class="mini-card">Revenue by Branch</div>', unsafe_allow_html=True)
+            branch_perf = (
+                analytics[analytics["branch"] != ""]
+                .groupby("branch", as_index=False)["revenue_num"]
+                .sum()
+                .rename(columns={"revenue_num": "revenue"})
+                .sort_values("revenue", ascending=False)
+                .head(12)
+                .set_index("branch")
+            )
+            if branch_perf.empty:
+                st.caption("No branch data found.")
+            else:
+                st.bar_chart(branch_perf)
+
+        ch3, ch4 = st.columns(2)
+        with ch3:
+            st.markdown('<div class="mini-card">Monthly Delivery Trend</div>', unsafe_allow_html=True)
+            monthly = (
+                analytics.dropna(subset=["start_dt"])
+                .assign(month=lambda x: x["start_dt"].dt.to_period("M").astype(str))
+                .groupby("month", as_index=False)
+                .agg(programs=("month", "size"), participants=("participants_num", "sum"), revenue=("revenue_num", "sum"))
+                .set_index("month")
+            )
+            if monthly.empty:
+                st.caption("No valid dates for trend analysis.")
+            else:
+                st.line_chart(monthly[["programs", "participants"]])
+        with ch4:
+            st.markdown('<div class="mini-card">Satisfaction by Trainer</div>', unsafe_allow_html=True)
+            trainer_satis = (
+                analytics[(analytics["trainer"] != "") & analytics["satis_num"].notna()]
+                .groupby("trainer", as_index=False)
+                .agg(avg_satisfaction=("satis_num", "mean"), programs=("trainer", "size"))
+                .sort_values("avg_satisfaction", ascending=False)
+                .head(12)
+            )
+            if trainer_satis.empty:
+                st.caption("No trainer satisfaction data available.")
+            else:
+                st.dataframe(trainer_satis, use_container_width=True, hide_index=True)
+
+        st.markdown('<div class="mini-card">Detailed Conducted Programs Table</div>', unsafe_allow_html=True)
+        st.dataframe(analytics, use_container_width=True, hide_index=True)
+
+
 def render_admin_panel() -> None:
     if not admin_auth_gate():
         return
@@ -737,10 +922,12 @@ def render_admin_panel() -> None:
     st.subheader("Admin Export")
     participants_export = get_participants_admin_dataframe()
     registrations_export = get_registrations_admin_dataframe()
+    delivered_export = get_delivered_training_programs_dataframe()
     output = BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
         participants_export.to_excel(writer, index=False, sheet_name="Participants")
         registrations_export.to_excel(writer, index=False, sheet_name="Registrations")
+        delivered_export.to_excel(writer, index=False, sheet_name="Conducted_Programs")
     st.download_button(
         "Download Admin Workbook (.xlsx)",
         data=output.getvalue(),
@@ -764,8 +951,8 @@ def render_admin_panel() -> None:
 
 
 export_df = get_export_dataframe()
-tab_dashboard, tab_import, tab_manual, tab_groups, tab_export, tab_admin = st.tabs(
-    ["Dashboard", "Bulk Import", "Manual Entry", "Groups", "Export", "Admin Panel"]
+tab_dashboard, tab_import, tab_manual, tab_groups, tab_export, tab_conducted, tab_admin = st.tabs(
+    ["Dashboard", "Bulk Import", "Manual Entry", "Groups", "Export", "Conducted Programs", "Admin Panel"]
 )
 
 with tab_dashboard:
@@ -782,6 +969,9 @@ with tab_groups:
 
 with tab_export:
     render_export(export_df)
+
+with tab_conducted:
+    render_delivered_programs_section()
 
 with tab_admin:
     render_admin_panel()

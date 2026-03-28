@@ -72,6 +72,25 @@ def init_db() -> None:
                 FOREIGN KEY(training_program_id) REFERENCES training_programs(id) ON DELETE CASCADE,
                 FOREIGN KEY(training_group_id) REFERENCES training_groups(id) ON DELETE SET NULL
             );
+
+            CREATE TABLE IF NOT EXISTS delivered_training_programs (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                training_type TEXT,
+                direction TEXT,
+                training_name TEXT NOT NULL,
+                training_format TEXT,
+                sale_type TEXT,
+                client_company TEXT,
+                start_date TEXT,
+                end_date TEXT,
+                duration_hours REAL,
+                trainer TEXT,
+                participants_count INTEGER,
+                satisfaction_survey_rate REAL,
+                revenue REAL,
+                branch TEXT,
+                created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
         _apply_migrations(conn)
@@ -719,6 +738,235 @@ def delete_training_group(group_name: str) -> None:
 def clear_all_registry_data() -> None:
     with get_connection() as conn:
         conn.execute("DELETE FROM participant_trainings")
+        conn.execute("DELETE FROM delivered_training_programs")
         conn.execute("DELETE FROM participants")
         conn.execute("DELETE FROM training_programs")
         conn.execute("DELETE FROM training_groups")
+
+
+def create_delivered_programs_template_dataframe() -> pd.DataFrame:
+    columns = [
+        "type",
+        "direction",
+        "training_name",
+        "format",
+        "sale_type",
+        "client_company",
+        "start_date",
+        "end_date",
+        "duration",
+        "trainer",
+        "number_of_participants",
+        "satis_survey_rate",
+        "revenue",
+        "branch",
+    ]
+    return pd.DataFrame(
+        [
+            {
+                "type": "Training",
+                "direction": "TAT-LV",
+                "training_name": "Advanced Diagnostics",
+                "format": "F2F",
+                "sale_type": "Internal",
+                "client_company": "Auto Service Ltd",
+                "start_date": "2026-03-10",
+                "end_date": "2026-03-12",
+                "duration": 16,
+                "trainer": "Nino Gelashvili",
+                "number_of_participants": 18,
+                "satis_survey_rate": 0.94,
+                "revenue": 3200,
+                "branch": "Tbilisi",
+            }
+        ],
+        columns=columns,
+    )
+
+
+def normalize_delivered_programs_upload_dataframe(df: pd.DataFrame) -> pd.DataFrame:
+    alias_map = {
+        "type": "type",
+        "direction": "direction",
+        "training_name": "training_name",
+        "training name": "training_name",
+        "name": "training_name",
+        "format": "format",
+        "sale_type": "sale_type",
+        "sale type": "sale_type",
+        "client/company": "client_company",
+        "client_company": "client_company",
+        "client": "client_company",
+        "company": "client_company",
+        "start_date": "start_date",
+        "start date": "start_date",
+        "end_date": "end_date",
+        "end date": "end_date",
+        "duration": "duration",
+        "duration_hours": "duration",
+        "trainer": "trainer",
+        "number_of_participants": "number_of_participants",
+        "number of participants": "number_of_participants",
+        "participants": "number_of_participants",
+        "satis. survey rate": "satis_survey_rate",
+        "satis_survey_rate": "satis_survey_rate",
+        "satisfaction_survey_rate": "satis_survey_rate",
+        "revenue": "revenue",
+        "branch": "branch",
+    }
+
+    normalized_headers = {}
+    for c in df.columns:
+        key = str(c).strip()
+        normalized_key = key.lower().replace("_", " ")
+        normalized_headers[c] = alias_map.get(key.lower(), alias_map.get(normalized_key, normalized_key.replace(" ", "_")))
+    df = df.rename(columns=normalized_headers)
+
+    required = ["training_name"]
+    missing = [c for c in required if c not in df.columns]
+    if missing:
+        raise ValueError(f"Missing required columns: {', '.join(missing)}")
+
+    optional_defaults = {
+        "type": "",
+        "direction": "",
+        "format": "",
+        "sale_type": "",
+        "client_company": "",
+        "start_date": "",
+        "end_date": "",
+        "duration": "",
+        "trainer": "",
+        "number_of_participants": "",
+        "satis_survey_rate": "",
+        "revenue": "",
+        "branch": "",
+    }
+    for col, default in optional_defaults.items():
+        if col not in df.columns:
+            df[col] = default
+
+    return df[
+        [
+            "type",
+            "direction",
+            "training_name",
+            "format",
+            "sale_type",
+            "client_company",
+            "start_date",
+            "end_date",
+            "duration",
+            "trainer",
+            "number_of_participants",
+            "satis_survey_rate",
+            "revenue",
+            "branch",
+        ]
+    ]
+
+
+def add_delivered_training_program(payload: dict) -> None:
+    with get_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO delivered_training_programs (
+                training_type,
+                direction,
+                training_name,
+                training_format,
+                sale_type,
+                client_company,
+                start_date,
+                end_date,
+                duration_hours,
+                trainer,
+                participants_count,
+                satisfaction_survey_rate,
+                revenue,
+                branch
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload.get("type"),
+                payload.get("direction"),
+                payload.get("training_name"),
+                payload.get("format"),
+                payload.get("sale_type"),
+                payload.get("client_company"),
+                _to_iso_datetime(payload.get("start_date")),
+                _to_iso_datetime(payload.get("end_date")),
+                pd.to_numeric(payload.get("duration"), errors="coerce"),
+                payload.get("trainer"),
+                pd.to_numeric(payload.get("number_of_participants"), errors="coerce"),
+                pd.to_numeric(payload.get("satis_survey_rate"), errors="coerce"),
+                pd.to_numeric(payload.get("revenue"), errors="coerce"),
+                payload.get("branch"),
+            ),
+        )
+
+
+def import_delivered_training_programs_from_dataframe(df: pd.DataFrame) -> int:
+    inserted = 0
+    with get_connection() as conn:
+        for _, r in df.iterrows():
+            training_name = str(r.get("training_name", "")).strip()
+            if not training_name:
+                continue
+            conn.execute(
+                """
+                INSERT INTO delivered_training_programs (
+                    training_type, direction, training_name, training_format, sale_type,
+                    client_company, start_date, end_date, duration_hours, trainer,
+                    participants_count, satisfaction_survey_rate, revenue, branch
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    str(r.get("type", "")).strip() or None,
+                    str(r.get("direction", "")).strip() or None,
+                    training_name,
+                    str(r.get("format", "")).strip() or None,
+                    str(r.get("sale_type", "")).strip() or None,
+                    str(r.get("client_company", "")).strip() or None,
+                    _to_iso_datetime(r.get("start_date")),
+                    _to_iso_datetime(r.get("end_date")),
+                    pd.to_numeric(r.get("duration"), errors="coerce"),
+                    str(r.get("trainer", "")).strip() or None,
+                    pd.to_numeric(r.get("number_of_participants"), errors="coerce"),
+                    pd.to_numeric(r.get("satis_survey_rate"), errors="coerce"),
+                    pd.to_numeric(r.get("revenue"), errors="coerce"),
+                    str(r.get("branch", "")).strip() or None,
+                ),
+            )
+            inserted += 1
+    return inserted
+
+
+def get_delivered_training_programs_dataframe() -> pd.DataFrame:
+    with get_connection() as conn:
+        return pd.read_sql_query(
+            """
+            SELECT
+                id,
+                training_type AS type,
+                direction,
+                training_name,
+                training_format AS format,
+                sale_type,
+                client_company,
+                start_date,
+                end_date,
+                duration_hours AS duration,
+                trainer,
+                participants_count AS number_of_participants,
+                satisfaction_survey_rate AS satis_survey_rate,
+                revenue,
+                branch,
+                created_at
+            FROM delivered_training_programs
+            ORDER BY COALESCE(start_date, created_at) DESC
+            """,
+            conn,
+        )
